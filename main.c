@@ -1,108 +1,150 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
-#include <sys/types.h>
+#include <string.h>
 #include <sys/wait.h>
-#include <limits.h>
+#include <pwd.h>
 #include <errno.h>
+#include <signal.h>
+#include <sys/types.h>
 
-#define MAX_ARGS 64
-#define MAX_LINE 1024
-#define PROMPT_SIZE 128
+#define MAX_BG_JOBS 100
+
+typedef struct {
+    pid_t pid;
+    char cmd[256];
+} bg_job;
+
+bg_job bg_jobs[MAX_BG_JOBS];
+int bg_job_count = 0;
 
 void print_prompt() {
-    char cwd[PATH_MAX];
-    char hostname[HOST_NAME_MAX];
+    char cwd[1024];
+    char hostname[1024];
     char *username = getlogin();
-
-    if (getcwd(cwd, sizeof(cwd)) != NULL && gethostname(hostname, sizeof(hostname)) == 0) {
+    
+    if (getcwd(cwd, sizeof(cwd)) != NULL) {
+        gethostname(hostname, sizeof(hostname));
         printf("%s@%s: %s > ", username, hostname, cwd);
     } else {
-        perror("Error fetching prompt information");
+        perror("getcwd() error");
     }
 }
 
-void execute_command(char *args[], int background) {
+void execute_foreground(char **args) {
     pid_t pid = fork();
-
     if (pid == 0) {
-        // Child process
+        // Child process: execute the command
         if (execvp(args[0], args) == -1) {
-            perror("execvp failed");
+            perror("execvp error");
         }
         exit(EXIT_FAILURE);
     } else if (pid < 0) {
-        // Error forking
-        perror("fork failed");
+        // Fork failed
+        perror("fork error");
     } else {
-        // Parent process
-        if (!background) {
-            int status;
-            waitpid(pid, &status, 0);  // Wait for the foreground process to finish
-        } else {
-            printf("Process running in background with PID %d\n", pid);
+        // Parent process: wait for the child to finish
+        int status;
+        waitpid(pid, &status, 0);
+    }
+}
+
+void execute_background(char **args) {
+    pid_t pid = fork();
+    if (pid == 0) {
+        // Child process: execute the command
+        if (execvp(args[1], &args[1]) == -1) {
+            perror("execvp error");
         }
+        exit(EXIT_FAILURE);
+    } else if (pid < 0) {
+        // Fork failed
+        perror("fork error");
+    } else {
+        // Parent process: add job to the background job list
+        if (bg_job_count < MAX_BG_JOBS) {
+            bg_jobs[bg_job_count].pid = pid;
+            strcpy(bg_jobs[bg_job_count].cmd, args[1]);
+            bg_job_count++;
+        }
+        printf("[%d]: %s running in background\n", pid, args[1]);
     }
 }
 
 void change_directory(char *path) {
-    if (path == NULL) {
-        path = getenv("HOME");  // Default to home directory
+    if (path == NULL || strcmp(path, "~") == 0) {
+        path = getenv("HOME");
     }
 
     if (chdir(path) != 0) {
-        perror("chdir failed");
+        perror("chdir error");
+    }
+}
+
+void bglist() {
+    printf("Background jobs:\n");
+    for (int i = 0; i < bg_job_count; i++) {
+        printf("%d: %s\n", bg_jobs[i].pid, bg_jobs[i].cmd);
+    }
+    printf("Total Background jobs: %d\n", bg_job_count);
+}
+
+void check_background_jobs() {
+    for (int i = 0; i < bg_job_count; i++) {
+        int status;
+        pid_t result = waitpid(bg_jobs[i].pid, &status, WNOHANG);
+        if (result == 0) {
+            // Job is still running
+            continue;
+        } else if (result > 0) {
+            // Job has finished
+            printf("%d: %s has terminated.\n", bg_jobs[i].pid, bg_jobs[i].cmd);
+            // Remove the job from the list
+            for (int j = i; j < bg_job_count - 1; j++) {
+                bg_jobs[j] = bg_jobs[j + 1];
+            }
+            bg_job_count--;
+        }
     }
 }
 
 int main() {
-    char line[MAX_LINE];
-    char *args[MAX_ARGS];
-    char *token;
-    int background;
-
+    char input[1024];
+    char *args[64];
+    
     while (1) {
         print_prompt();
-        if (fgets(line, sizeof(line), stdin) == NULL) {
-            printf("\n");
-            break;  // Handle Ctrl-D for exit
+        fgets(input, sizeof(input), stdin);
+        
+        // Remove newline from input
+        input[strcspn(input, "\n")] = 0;
+        
+        // Tokenize the input
+        int i = 0;
+        args[i] = strtok(input, " ");
+        while (args[i] != NULL) {
+            i++;
+            args[i] = strtok(NULL, " ");
         }
 
-        line[strcspn(line, "\n")] = '\0';  // Remove trailing newline
-
-        // Tokenize input
-        int arg_count = 0;
-        background = 0;
-        token = strtok(line, " ");
-        while (token != NULL) {
-            args[arg_count++] = token;
-            token = strtok(NULL, " ");
-        }
-
-        args[arg_count] = NULL;  // Null terminate the argument list
-
-        // Check for empty command
-        if (arg_count == 0) {
+        // Handle built-in commands
+        if (args[0] == NULL) {
             continue;
-        }
-
-        // Check for background execution (last argument '&')
-        if (strcmp(args[arg_count - 1], "&") == 0) {
-            background = 1;
-            args[arg_count - 1] = NULL;  // Remove '&' from arguments
-        }
-
-        // Handle built-in commands like 'cd'
-        if (strcmp(args[0], "cd") == 0) {
+        } else if (strcmp(args[0], "cd") == 0) {
             change_directory(args[1]);
         } else if (strcmp(args[0], "exit") == 0) {
-            break;  // Exit the shell
+            break;
+        } else if (strcmp(args[0], "bg") == 0) {
+            execute_background(args);
+        } else if (strcmp(args[0], "bglist") == 0) {
+            bglist();
         } else {
-            execute_command(args, background);
+            // Foreground execution
+            execute_foreground(args);
         }
+
+        check_background_jobs();
     }
 
     return 0;
 }
-

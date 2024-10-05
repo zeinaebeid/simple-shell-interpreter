@@ -4,11 +4,11 @@ TARGET = ssi
 
 all: $(TARGET)
 
-$(TARGET): ssi.o
-	$(CC) $(CFLAGS) -o $(TARGET) ssi.o
+$(TARGET): main.o
+	$(CC) $(CFLAGS) -o $(TARGET) main.o
 
-ssi.o: ssi.c
-	$(CC) $(CFLAGS) -c ssi.c
+main.o: main.c
+	$(CC) $(CFLAGS) -c main.c
 
 clean:
 	rm -f *.o $(TARGET)

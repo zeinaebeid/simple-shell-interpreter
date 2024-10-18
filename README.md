@@ -1,9 +1,7 @@
 # Simple Shell Interpreter (SSI)
 
-**CSc 360: Operating Systems (Fall 2024)**  
-**Programming Assignment 1 (P1)**  
+**Operating Systems (Fall 2024)**   
 **Author**: Zeina Ebeid  
-**Date**: October 4, 2024
 
 ---
 
